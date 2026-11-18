@@ -1,0 +1,44 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function googleUser() {
+      return request.auth != null && request.auth.token.email_verified == true
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+    function ownEmail(email) {
+      return googleUser() && request.auth.token.email.lower() == email;
+    }
+    function admin() {
+      return googleUser() && exists(/databases/$(database)/documents/gatewayAdmins/$(request.auth.uid))
+        && get(/databases/$(database)/documents/gatewayAdmins/$(request.auth.uid)).data.enabled == true;
+    }
+    match /gatewayAdmins/{uid} {
+      allow get: if googleUser() && request.auth.uid == uid;
+    }
+    match /gatewayMembers/{email} {
+      allow get: if ownEmail(email) || admin();
+      allow list: if admin();
+      allow create, update: if (ownEmail(email) || admin())
+        && request.resource.data.keys().hasOnly(['email'])
+        && request.resource.data.email == email;
+      match /projects/{project} {
+        allow read: if ownEmail(email) || admin();
+        allow create, update: if admin()
+          && exists(/databases/$(database)/documents/gatewayProjects/$(project))
+          && request.resource.data.keys().hasOnly(['edit'])
+          && request.resource.data.edit is list && request.resource.data.edit.size() <= 4
+          && request.resource.data.edit.hasOnly(['piles','structures','modules','torque']);
+        allow delete: if admin();
+      }
+    }
+    match /gatewayProjects/{project} {
+      allow list: if admin();
+      allow get: if admin() || (googleUser() &&
+        exists(/databases/$(database)/documents/gatewayMembers/$(request.auth.token.email.lower())/projects/$(project)));
+      allow create, update: if admin() && request.resource.data.keys().hasOnly(['name','url'])
+        && request.resource.data.name is string && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 100 && request.resource.data.url is string
+        && request.resource.data.url.matches('https://.+');
+    }
+  }
+}
